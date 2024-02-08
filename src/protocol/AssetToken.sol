@@ -21,7 +21,9 @@ contract AssetToken is ERC20 {
     // The underlying per asset exchange rate
     // ie: s_exchangeRate = 2
     // means 1 asset token is worth 2 underlying tokens
+    // e underlying == USDC, token == shares
     uint256 private s_exchangeRate;
+    // e not used here, but called and used in ThunderLoan.sol
     uint256 public constant EXCHANGE_RATE_PRECISION = 1e18;
     uint256 private constant STARTING_EXCHANGE_RATE = 1e18;
 
@@ -52,7 +54,8 @@ contract AssetToken is ERC20 {
     //////////////////////////////////////////////////////////////*/
     constructor(
         address thunderLoan,
-        IERC20 underlying,
+        IERC20 underlying, // e the token depositied for flash loans. So it the ERC20 stored here instead of the
+            // FlashLoan contract?
         string memory assetName,
         string memory assetSymbol
     )
@@ -65,6 +68,7 @@ contract AssetToken is ERC20 {
         s_exchangeRate = STARTING_EXCHANGE_RATE;
     }
 
+    // e ok, only the thunderloan contract can mint. Function exploses internal _mint() internal function from OpenSea
     function mint(address to, uint256 amount) external onlyThunderLoan {
         _mint(to, amount);
     }
@@ -74,9 +78,13 @@ contract AssetToken is ERC20 {
     }
 
     function transferUnderlyingTo(address to, uint256 amount) external onlyThunderLoan {
+        // qanswered what happens if USDC blacklists the thunderloan contract or the assettoken contract?
+        // @audit medium: the protocol would be frozen
+        // @follow-up weird ERC20s with USDC
         i_underlying.safeTransfer(to, amount);
     }
 
+    // responsible for updating the exchange rate of assetTokens -> underlying
     function updateExchangeRate(uint256 fee) external onlyThunderLoan {
         // 1. Get the current exchange rate
         // 2. How big the fee is should be divided by the total supply
@@ -86,6 +94,14 @@ contract AssetToken is ERC20 {
         // newExchangeRate = oldExchangeRate * (totalSupply + fee) / totalSupply
         // newExchangeRate = 1 (4 + 0.5) / 4
         // newExchangeRate = 1.125
+        // q why does the exhange rate always increase?
+        // q what if the totalSupply() is zero?
+        // @audit gas: too many storgae reads, we read s_exchangeRate several times
+        // e if there is 8 USDC, 8 asset token, fee = 1 and eR = 1
+        // then new_eR = 1 * ( 8 + 1) / 8 = 9 / 8
+        // scenario 1: if someone redeems by giving back 8 asset tokens: 8 * 9 / 8 = 9 USDC
+        // senario 2: if someone redeems by giving back 4 asset token: 4 * 9 / 8 = 36 / 8 = 4.5 USDC, then
+        // ---------- someone else by giving back 4 more... OK
         uint256 newExchangeRate = s_exchangeRate * (totalSupply() + fee) / totalSupply();
 
         if (newExchangeRate <= s_exchangeRate) {

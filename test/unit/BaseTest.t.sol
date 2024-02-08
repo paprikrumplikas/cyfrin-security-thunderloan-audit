@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.20;
 
-import { Test, console } from "forge-std/Test.sol";
+import { Test, console } from "../../lib/forge-std/src/Test.sol";
 import { ThunderLoan } from "../../src/protocol/ThunderLoan.sol";
 import { ERC20Mock } from "../mocks/ERC20Mock.sol";
 import { MockTSwapPool } from "../mocks/MockTSwapPool.sol";
 import { MockPoolFactory } from "../mocks/MockPoolFactory.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import { BuffMockPoolFactory } from "../mocks/BuffMockPoolFactory.sol";
+import { BuffMockTSwap } from "../mocks/BuffMockTSwap.sol";
+import { IFlashLoanReceiver } from "../../src/interfaces/IFlashLoanReceiver.sol";
 
 contract BaseTest is Test {
     ThunderLoan thunderLoanImplementation;

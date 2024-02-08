@@ -227,6 +227,7 @@ contract ThunderLoanUpgraded is Initializable, OwnableUpgradeable, UUPSUpgradeab
         s_currentlyFlashLoaning[token] = false;
     }
 
+    // @audit info not used internally, can be marked external
     function repay(IERC20 token, uint256 amount) public {
         if (!s_currentlyFlashLoaning[token]) {
             revert ThunderLoan__NotCurrentlyFlashLoaning();
@@ -272,10 +273,12 @@ contract ThunderLoanUpgraded is Initializable, OwnableUpgradeable, UUPSUpgradeab
         return address(s_tokenToAssetToken[token]) != address(0);
     }
 
+    // @audit info not used internally, can be marked external
     function getAssetFromToken(IERC20 token) public view returns (AssetToken) {
         return s_tokenToAssetToken[token];
     }
 
+    // @audit info not used internally, can be marked external
     function isCurrentlyFlashLoaning(IERC20 token) public view returns (bool) {
         return s_currentlyFlashLoaning[token];
     }

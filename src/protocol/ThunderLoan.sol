@@ -73,6 +73,8 @@ import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils
 import { OracleUpgradeable } from "./OracleUpgradeable.sol";
 import { Address } from "@openzeppelin/contracts/utils/Address.sol";
 import { IFlashLoanReceiver } from "../interfaces/IFlashLoanReceiver.sol";
+// e should implement this interface. (import, inherit, and then implement the funcs of the IF)
+//import { IThunderLoan} from "../interfaces/IThunderLoan.sol";
 
 contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, OracleUpgradeable {
     error ThunderLoan__NotAllowedToken(IERC20 token);
@@ -81,6 +83,7 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
     error ThunderLoan__NotEnoughTokenBalance(uint256 startingBalance, uint256 amount);
     error ThunderLoan__CallerIsNotContract();
     error ThunderLoan__AlreadyAllowed();
+    // @audit this error is not user
     error ThunderLoan__ExhangeRateCanOnlyIncrease();
     error ThunderLoan__NotCurrentlyFlashLoaning();
     error ThunderLoan__BadNewFee();
@@ -91,10 +94,14 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
     /*//////////////////////////////////////////////////////////////
                             STATE VARIABLES
     //////////////////////////////////////////////////////////////*/
+    // e token is the underlying token, the token being deposited and what can be borrowed.
+    // AssetToken is the shares, what you get in return
     mapping(IERC20 => AssetToken) public s_tokenToAssetToken;
 
     // The fee in WEI, it should have 18 decimals. Each flash loan takes a flat fee of the token price.
+    // @audit should be constant or immutable
     uint256 private s_feePrecision;
+    // e this is ok the way it is, it can be changed
     uint256 private s_flashLoanFee; // 0.3% ETH fee
 
     mapping(IERC20 token => bool currentlyFlashLoaning) private s_currentlyFlashLoaning;
@@ -137,28 +144,40 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
     /*//////////////////////////////////////////////////////////////
                            EXTERNAL FUNCTIONS
     //////////////////////////////////////////////////////////////*/
+    // @audit info: for consistency, change name to poolFactoryAddress
+    // q what would happen if we deployed the contract and someone else initialized it? They could pick their
+    // tswapAddress!
+    // @audit info: initializers can be frontrun
     function initialize(address tswapAddress) external initializer {
         __Ownable_init(msg.sender);
         __UUPSUpgradeable_init();
-        __Oracle_init(tswapAddress);
+        __Oracle_init(tswapAddress); // e this looks like we are using TSwap as an oracle
         s_feePrecision = 1e18;
         s_flashLoanFee = 3e15; // 0.3% ETH fee
     }
 
+    // @audit info: missing natspec.
+    // e token is the underlying token, the one being deposited and what can be borrowed
     function deposit(IERC20 token, uint256 amount) external revertIfZero(amount) revertIfNotAllowedToken(token) {
         AssetToken assetToken = s_tokenToAssetToken[token];
         uint256 exchangeRate = assetToken.getExchangeRate();
+        // e If the amount is 100 and the exchange rate is 2: 100e18 * 1e18 / 2e18 = 50e18
+        // e exchangeRate can never be 0: starts from 1 and then it can only increase due to the assettoken conditional
         uint256 mintAmount = (amount * assetToken.EXCHANGE_RATE_PRECISION()) / exchangeRate;
         emit Deposit(msg.sender, token, amount);
         assetToken.mint(msg.sender, mintAmount);
+        // @audit high: these should not be updated here, it causes ppl to not be able to redeem!
         uint256 calculatedFee = getCalculatedFee(token, amount);
         assetToken.updateExchangeRate(calculatedFee);
+        // e the liqudity provided goes to the assetToken contract, not to ThunderLoan
         token.safeTransferFrom(msg.sender, address(assetToken), amount);
     }
 
     /// @notice Withdraws the underlying token from the asset token
     /// @param token The token they want to withdraw from
     /// @param amountOfAssetToken The amount of the underlying they want to withdraw
+    // e 1 have 10 asset tokens, let me get USDC based on the exchange rate
+    // @follow-up no check for user balance, can redeem any amount? Or will it revert at burn?
     function redeem(
         IERC20 token,
         uint256 amountOfAssetToken
@@ -178,6 +197,7 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
         assetToken.transferUnderlyingTo(msg.sender, amountUnderlying);
     }
 
+    // @audit info: missing natspec
     function flashloan(
         address receiverAddress,
         IERC20 token,
@@ -195,12 +215,15 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
             revert ThunderLoan__NotEnoughTokenBalance(startingBalance, amount);
         }
 
+        // e only smart contract can call this, as they have to implement the callback: executeOperation
         if (receiverAddress.code.length == 0) {
             revert ThunderLoan__CallerIsNotContract();
         }
 
         uint256 fee = getCalculatedFee(token, amount);
+        // @audit info: messed up the slither disables
         // slither-disable-next-line reentrancy-vulnerabilities-2 reentrancy-vulnerabilities-3
+        // @follow-up reentrancy
         assetToken.updateExchangeRate(fee);
 
         emit FlashLoan(receiverAddress, token, amount, fee, params);
@@ -208,7 +231,10 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
         s_currentlyFlashLoaning[token] = true;
         assetToken.transferUnderlyingTo(receiverAddress, amount);
         // slither-disable-next-line unused-return reentrancy-vulnerabilities-2
-        receiverAddress.functionCall(
+        // @follow-up reentrancy
+        // @follow-up do we need the return value of functionCall()?
+        // @note external call here!
+        receiverAddress.functionCall( // e this functionCall is coming from the Address lib
             abi.encodeCall(
                 IFlashLoanReceiver.executeOperation,
                 (
@@ -228,6 +254,9 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
         s_currentlyFlashLoaning[token] = false;
     }
 
+    // @audit info not used internally, can be marked external
+    // @audit no natspec
+    // @audit low: cant use repay to rapay a flashloan inside a flash loan
     function repay(IERC20 token, uint256 amount) public {
         if (!s_currentlyFlashLoaning[token]) {
             revert ThunderLoan__NotCurrentlyFlashLoaning();
@@ -241,6 +270,7 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
             if (address(s_tokenToAssetToken[token]) != address(0)) {
                 revert ThunderLoan__AlreadyAllowed();
             }
+            // q what if it does not have a name? According to the doc, the protocol is aware of weird erc20s
             string memory name = string.concat("ThunderLoan ", IERC20Metadata(address(token)).name());
             string memory symbol = string.concat("tl", IERC20Metadata(address(token)).symbol());
             AssetToken assetToken = new AssetToken(address(this), token, name, symbol);
@@ -249,16 +279,32 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
             return assetToken;
         } else {
             AssetToken assetToken = s_tokenToAssetToken[token];
+            // @note this deletion does not work in chisel, and this is a bug. But in remix it does work ok.
             delete s_tokenToAssetToken[token];
             emit AllowedTokenSet(token, assetToken, allowed);
             return assetToken;
         }
     }
 
+    // @audit info: missing natspec
+    // this calculates the fee of the flash loan
+    // @param the amount being borrowed
+    // @param the token being borrowed
+    // q how does this calculate the fee?
     function getCalculatedFee(IERC20 token, uint256 amount) public view returns (uint256 fee) {
         //slither-disable-next-line divide-before-multiply
+        // q what if the borrowed token is weth?
+        // e 100e18 * 0.5e18 / 1e18
+        // e this is why we are using TSwap
+        // @note fee is based NOT on the amount of the token, but the value of the token in WETH
+        // is this correct?
+        // 1 USDC == 0.1 WETH
+        // 1 USDC + 0.0003 WETH ---- this is what we calculate here
+        // 1 USDC + 0.0003 USDC?? ---- but then when checking the balances we act like this was the case
+        // @audit high: if the fee is going to be in the token, then the value should reflect that
         uint256 valueOfBorrowedToken = (amount * getPriceInWeth(address(token))) / s_feePrecision;
         //slither-disable-next-line divide-before-multiply
+        // e a named return parameter does not need a return statement, so this is ok
         fee = (valueOfBorrowedToken * s_flashLoanFee) / s_feePrecision;
     }
 
@@ -266,6 +312,7 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
         if (newFee > s_feePrecision) {
             revert ThunderLoan__BadNewFee();
         }
+        // @audit must emit an event!
         s_flashLoanFee = newFee;
     }
 
@@ -273,10 +320,12 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
         return address(s_tokenToAssetToken[token]) != address(0);
     }
 
+    // @audit info not used internally, can be marked external
     function getAssetFromToken(IERC20 token) public view returns (AssetToken) {
         return s_tokenToAssetToken[token];
     }
 
+    // @audit info not used internally, can be marked external
     function isCurrentlyFlashLoaning(IERC20 token) public view returns (bool) {
         return s_currentlyFlashLoaning[token];
     }
@@ -289,5 +338,6 @@ contract ThunderLoan is Initializable, OwnableUpgradeable, UUPSUpgradeable, Orac
         return s_feePrecision;
     }
 
+    // e without this, anybody could upgrade the contract
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner { }
 }
