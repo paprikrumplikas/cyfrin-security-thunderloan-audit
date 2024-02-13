@@ -1,6 +1,150 @@
+---
+title: Protocol Audit Report
+author: Norbert Orgován
+date: February 13, 2024
+header-includes:
+  - \usepackage{titling}
+  - \usepackage{graphicx}
+---
+
+\begin{titlepage}
+    \centering
+    \begin{figure}[h]
+        \centering
+        \includegraphics[width=0.5\textwidth]{logo.pdf} 
+    \end{figure}
+    \vspace*{2cm}
+    {\Huge\bfseries ThunderLoan Protocol Audit Report\par}
+    \vspace{1cm}
+    {\Large Version 1.0\par}
+    \vspace{2cm}
+    {\Large\itshape Norbert Orgován\par}
+    \vfill
+    {\large \today\par}
+\end{titlepage}
+
+\maketitle
+
+<!-- Your report starts here! -->
+
+Prepared by: [Orgovan & Churros](https://github.com/paprikrumplikas)
+
+Lead Auditors: 
+- Norbert Orgován
+
+# Table of Contents
+- [Table of Contents](#table-of-contents)
+- [Protocol Summary](#protocol-summary)
+- [Disclaimer](#disclaimer)
+- [Risk Classification](#risk-classification)
+- [Audit Details](#audit-details)
+  - [Scope](#scope)
+  - [Roles](#roles)
+- [Executive Summary](#executive-summary)
+  - [Issues found](#issues-found)
+- [Findings](#findings)
+  - [High](#high)
+    - [\[H-1\] Flash loan repayment bypass allows unathorized withdrawals](#h-1-flash-loan-repayment-bypass-allows-unathorized-withdrawals)
+    - [\[H-2\] Erroneus `ThunderLoan::updateExchangeRate` in the `depost` function causes protocol to think is has collected more fees than it actually does, which blocks redemption and incorrectly sets the exchange rate](#h-2-erroneus-thunderloanupdateexchangerate-in-the-depost-function-causes-protocol-to-think-is-has-collected-more-fees-than-it-actually-does-which-blocks-redemption-and-incorrectly-sets-the-exchange-rate)
+    - [\[H-3\] Mixing up variable locations causes strorage collisions in `ThunderLoan::s_flashLoanFee` and `ThunderLoan::s_currentlyFlashLoaning`, freezing protocol](#h-3-mixing-up-variable-locations-causes-strorage-collisions-in-thunderloans_flashloanfee-and-thunderloans_currentlyflashloaning-freezing-protocol)
+  - [Medium](#medium)
+    - [\[M-1\] Using TSwap as price oracle leads to price and oracle manipulation attacks](#m-1-using-tswap-as-price-oracle-leads-to-price-and-oracle-manipulation-attacks)
+    - [\[M-2\] The USDC contract can be upgraded by a centralized entitiy, putting the protocol at risk of freeze](#m-2-the-usdc-contract-can-be-upgraded-by-a-centralized-entitiy-putting-the-protocol-at-risk-of-freeze)
+  - [Low](#low)
+    - [\[L-1\] `ThunderLoan::initialize` does not have access control, making initialization of this smart contract vulnerable to front-running](#l-1-thunderloaninitialize-does-not-have-access-control-making-initialization-of-this-smart-contract-vulnerable-to-front-running)
+    - [\[L-2\] `ThunderLoan:flashloan` and `ThunderLoan::repay` logic cannot handle multiple ongoing flash loans, `repay` cannot be used to repay a flashloan if it has another flashloan within it](#l-2-thunderloanflashloan-and-thunderloanrepay-logic-cannot-handle-multiple-ongoing-flash-loans-repay-cannot-be-used-to-repay-a-flashloan-if-it-has-another-flashloan-within-it)
+    - [\[L-3\] `ThunderLoan::_authorizeUpgrade` has an empty function body](#l-3-thunderloan_authorizeupgrade-has-an-empty-function-body)
+  - [Informational](#informational)
+    - [\[I-1\] Unused import in `IFlashLoanReceiver.sol`](#i-1-unused-import-in-iflashloanreceiversol)
+    - [\[I-2\] Crucial functions do not have a natspec](#i-2-crucial-functions-do-not-have-a-natspec)
+    - [\[I-3\] `IThunderLoan.sol` is not imported in `ThunderLoan.sol`, and the `repay` functions in these two contracts have different function signatures, causing confusion for external users who want to interact with `ThunderLoan.sol`](#i-3-ithunderloansol-is-not-imported-in-thunderloansol-and-the-repay-functions-in-these-two-contracts-have-different-function-signatures-causing-confusion-for-external-users-who-want-to-interact-with-thunderloansol)
+    - [\[I-4\] Missing check for `address(0)` when assigning a value to address storage variable in `OracleUpgradeable::__Oracle_init_unchained`](#i-4-missing-check-for-address0-when-assigning-a-value-to-address-storage-variable-in-oracleupgradeable__oracle_init_unchained)
+    - [\[I-5\] Missing fork tests to test the interaction with crucial external protocol `TSwap` might lead to undiscovered bugs and vulnerabilities](#i-5-missing-fork-tests-to-test-the-interaction-with-crucial-external-protocol-tswap-might-lead-to-undiscovered-bugs-and-vulnerabilities)
+    - [\[I-6\] `OracleUpgradeable::getPrice` and `OracleUpgradeable::getPriceInWeth` are redundant to each other, wasting gas](#i-6-oracleupgradeablegetprice-and-oracleupgradeablegetpriceinweth-are-redundant-to-each-other-wasting-gas)
+    - [\[I-7\] Custom error `ThunderLoan::ThunderLoan__ExhangeRateCanOnlyIncrease` is defined but not used](#i-7-custom-error-thunderloanthunderloan__exhangeratecanonlyincrease-is-defined-but-not-used)
+    - [\[I-8\] `ThunderLoan::repay`, `ThunderLoan::getAssetFromToken`, `ThunderLoan::currentlyFlashLoaning`, `ThunderLoanUpgraded::repay`, `ThunderLoanUpgraded::getAssetFromToken`, `ThunderLoanUpgraded::currentlyFlashLoaning` can be declared as an external functions](#i-8-thunderloanrepay-thunderloangetassetfromtoken-thunderloancurrentlyflashloaning-thunderloanupgradedrepay-thunderloanupgradedgetassetfromtoken-thunderloanupgradedcurrentlyflashloaning-can-be-declared-as-an-external-functions)
+  - [Gas](#gas)
+    - [\[G-1\] `AssetToken::updateExchangeRate` reads storage too many times to get the value of the same variable `s_exchangeRate`, wasting gas](#g-1-assettokenupdateexchangerate-reads-storage-too-many-times-to-get-the-value-of-the-same-variable-s_exchangerate-wasting-gas)
+    - [\[G-2\] `ThunderLoan::s_freePrecision` is never changed, but is not declared as a constant, wasting gas](#g-2-thunderloans_freeprecision-is-never-changed-but-is-not-declared-as-a-constant-wasting-gas)
+
+# Protocol Summary
+
+Thunder Loan is a flash loan protocol that draws inspiration from Aave and Compound. It allows users to perform flash loans and provides a mechanism for liquidity providers to earn interest on their capital.
+
+Core Features:
+
+- Flash Loans: Users can borrow assets for the duration of one transaction, with the requirement that the borrowed amount and a fee are repaid within the same transaction. This ensures the safety of the loans, as any failure to repay results in the transaction being reverted.
+  
+- Liquidity Provision: Individuals can deposit assets into Thunder Loan in exchange for AssetTokens. These tokens accrue interest based on the utilization of the protocol for flash loans.
+  
+- Fee Calculation: The protocol calculates borrowing fees using the TSwap price oracle, which helps determine the fee based on the amount borrowed.
+
+# Disclaimer
+
+The Orgovan & Churros team makes all effort to find as many vulnerabilities in the code in the given time period, but holds no responsibilities for the findings provided in this document. A security audit by the team is not an endorsement of the underlying business or product. The audit was time-boxed and the review of the code was solely on the security aspects of the Solidity implementation of the contracts.
+
+# Risk Classification
+
+|            |        | Impact |        |     |
+| ---------- | ------ | ------ | ------ | --- |
+|            |        | High   | Medium | Low |
+|            | High   | H      | H/M    | M   |
+| Likelihood | Medium | H/M    | M      | M/L |
+|            | Low    | M      | M/L    | L   |
+
+We use the [CodeHawks](https://docs.codehawks.com/hawks-auditors/how-to-evaluate-a-finding-severity) severity matrix to determine severity. See the documentation for more details.
+
+# Audit Details 
+
+## Scope
+
+- Commit Hash: 8803f851f6b37e99eab2e94b4690c8b70e26b3f6
+- In Scope:
+```
+#-- interfaces
+|   #-- IFlashLoanReceiver.sol
+|   #-- IPoolFactory.sol
+|   #-- ITSwapPool.sol
+|   #-- IThunderLoan.sol
+#-- protocol
+|   #-- AssetToken.sol
+|   #-- OracleUpgradeable.sol
+|   #-- ThunderLoan.sol
+#-- upgradedProtocol
+    #-- ThunderLoanUpgraded.sol
+```
+- Solc Version: 0.8.20
+- Chain(s) to deploy contract to: Ethereum
+- ERC20s:
+  - USDC 
+  - DAI
+  - LINK
+  - WETH
+
+## Roles
+
+- Owner: The owner of the protocol who has the power to upgrade the implementation. 
+- Liquidity Provider: A user who deposits assets into the protocol to earn interest. 
+- User: A user who takes out flash loans from the protocol.
+- 
+# Executive Summary
+
+We had 1 expert auditor assigned to this audit who spent xxx hours to thouroughly review the ThunderLoan codebase. Using both manual review and a number of tools (e.g. static analysis tools Slyther, Aderyn), a significant number of vulnerabilites have been found, as detailed below.
+
+| Severity      | Number of issues found |
+| ------------- | ---------------------- |
+| High          | 3                      |
+| Medium        | 2                      |
+| Low           | 3                      |
+| Informational | 8                      |
+| Gas           | 2                      |
+| Total         | 18                     |
+
+## Issues found
+# Findings
+
 
 ## High
-
 
 ### [H-1] Flash loan repayment bypass allows unathorized withdrawals
 
@@ -284,6 +428,8 @@ You can also see the storage layout difference by running `forge inspect Thunder
 +    uint256 private s_flashLoanFee; // 0.3% ETH fee
 +    uint256 public constant FEE_PRECISION = 1e18;
 ```
+
+
 
 ## Medium
 
@@ -658,7 +804,7 @@ and `IThunderLoan::repay`
 **Impact:** Somehwat as a result of the interface not having been imported in `ThunderLoan.sol`, the implementation of the `repay` function does not match the original function signature as it was declared in the interface. External users who want to interact with `ThunderLoan.sol` cannot use its interface to do so. 
 
 
-### [I-3] Missing check for `address(0)` when assigning a value to address storage variable in `OracleUpgradeable::__Oracle_init_unchained`
+### [I-4] Missing check for `address(0)` when assigning a value to address storage variable in `OracleUpgradeable::__Oracle_init_unchained`
 
 **Description:** `OracleUpgradeable::__Oracle_init_unchained` assigns a value to address storage variable `s_PoolFactory`. However, no check is implemented for `address(0)`.
 
@@ -686,7 +832,7 @@ Failing to do so might lead to:
 ```
 
 
-### [I-4] Missing fork tests to test the interaction with crucial external protocol `TSwap` might lead to undiscovered bugs and vulnerabilities
+### [I-5] Missing fork tests to test the interaction with crucial external protocol `TSwap` might lead to undiscovered bugs and vulnerabilities
 
 **Description:** The `ThunderLoan` protocol heavily relies on the expernal protocol `TSwap`. However, the test suite utilizes an extremely stripped-down mock version of `TSwap` which lacks most of the functionality of the real external protocol.
 
@@ -695,7 +841,7 @@ Failing to do so might lead to:
 **Recommended Mitigation:** Use forked tests to test the interaction of `ThunderLoan` and `Tswap`.
 
 
-### [I-5] `OracleUpgradeable::getPrice` and `OracleUpgradeable::getPriceInWeth` are redundant to each other, wasting gas
+### [I-6] `OracleUpgradeable::getPrice` and `OracleUpgradeable::getPriceInWeth` are redundant to each other, wasting gas
 
 **Description:** `getPriceInWeth` and `getPrice` perform the same operation, which is to return the price of a given token in WETH (Wrapped Ethereum). 
 
@@ -726,7 +872,7 @@ Failing to do so might lead to:
 ```
 
 
-### [I-6] Custom error `ThunderLoan::ThunderLoan__ExhangeRateCanOnlyIncrease` is defined but not used
+### [I-7] Custom error `ThunderLoan::ThunderLoan__ExhangeRateCanOnlyIncrease` is defined but not used
 
 **Description:** `ThunderLoan__ExhangeRateCanOnlyIncrease` is one of the custom errors defined in `ThunderLoan`, but it is never used. It has basically the same functionality as `AssetToken::AssetToken__ExhangeRateCanOnlyIncrease(uint256 oldExchangeRate, uint256 newExchangeRate);`, which is being used and already covers the intended functionality, making this custom error in `ThunderLoan` redundant.
 
@@ -751,9 +897,10 @@ In `AsseToken.sol`:
 ```
 
 
-### [I-7] `ThunderLoan::repay`, `ThunderLoan::getAssetFromToken`, `ThunderLoan::currentlyFlashLoaning`, `ThunderLoanUpgraded::repay`, `ThunderLoanUpgraded::getAssetFromToken`, `ThunderLoanUpgraded::currentlyFlashLoaning` can be declared as an external functions
+### [I-8] `ThunderLoan::repay`, `ThunderLoan::getAssetFromToken`, `ThunderLoan::currentlyFlashLoaning`, `ThunderLoanUpgraded::repay`, `ThunderLoanUpgraded::getAssetFromToken`, `ThunderLoanUpgraded::currentlyFlashLoaning` can be declared as an external functions
 
 **Description:** `repay`, `getAssetToken` and `currentlyFlashLoaning` are declared as public functions in both `ThunderLoan` and `ThunderLoanUpgraded`. However, they are not used internally in either contracts and, hence, can be declared as external functions instead.
+
 
 
 
